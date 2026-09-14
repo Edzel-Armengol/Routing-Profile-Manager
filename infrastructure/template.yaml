@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda Function URL backend for the Amazon Connect routing profile manager.
+
+Parameters:
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket in this Region containing the Lambda deployment ZIP.
+  LambdaCodeKey:
+    Type: String
+    Default: routing-profile-function.zip
+    Description: S3 object key for the Lambda deployment ZIP.
+  ConnectInstanceId:
+    Type: String
+    Default: eefde7f8-7534-4dac-a433-f5a922235cc5
+    Description: Amazon Connect instance identifier.
+  ConnectInstanceArn:
+    Type: String
+    Default: ""
+    Description: >
+      Amazon Connect instance ARN
+      (arn:aws:connect:<region>:<account-id>:instance/<ConnectInstanceId>).
+      Required by the Lambda function at runtime.
+  AllowedRoutingProfiles:
+    Type: String
+    Default: ""
+    Description: >
+      Optional comma-separated list of routing profile names to expose to agents.
+      When blank, all routing profiles in the Connect instance are available.
+      Example: Basic Routing Profile,Premium Routing Profile
+  FrontendOrigin:
+    Type: String
+    Default: "*"
+    Description: CORS origin for the frontend. Use * for the original open test configuration.
+
+Resources:
+  RoutingProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-handler
+      CodeUri:
+        Bucket: !Ref LambdaCodeBucket
+        Key: !Ref LambdaCodeKey
+      Handler: routing_profile_manager.lambda_handler
+      Runtime: python3.13
+      Architectures:
+        - arm64
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          CONNECT_INSTANCE_ID: !Ref ConnectInstanceId
+          CONNECT_INSTANCE_ARN: !Ref ConnectInstanceArn
+          ALLOWED_ROUTING_PROFILES: !Ref AllowedRoutingProfiles
+          LOG_LEVEL: INFO
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: connect:ListRoutingProfiles
+              Resource: !Sub arn:${AWS::Partition}:connect:${AWS::Region}:${AWS::AccountId}:instance/${ConnectInstanceId}
+            - Effect: Allow
+              Action: connect:UpdateUserRoutingProfile
+              Resource:
+                - !Sub arn:${AWS::Partition}:connect:${AWS::Region}:${AWS::AccountId}:instance/${ConnectInstanceId}/agent/*
+                - !Sub arn:${AWS::Partition}:connect:${AWS::Region}:${AWS::AccountId}:instance/${ConnectInstanceId}/routing-profile/*
+
+  RoutingProfileFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt RoutingProfileFunction.Arn
+      AuthType: NONE
+      InvokeMode: BUFFERED
+      Cors:
+        AllowCredentials: false
+        AllowHeaders:
+          - Content-Type
+        AllowMethods:
+          - GET
+          - PUT
+        AllowOrigins:
+          - !Ref FrontendOrigin
+        MaxAge: 300
+
+  RoutingProfileFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref RoutingProfileFunction
+      FunctionUrlAuthType: NONE
+      Principal: "*"
+
+  RoutingProfileFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref RoutingProfileFunction
+      InvokedViaFunctionUrl: true
+      Principal: "*"
+
+Outputs:
+  FunctionUrl:
+    Description: Set REACT_APP_API_BASE_URL to this Lambda Function URL.
+    Value: !GetAtt RoutingProfileFunctionUrl.FunctionUrl
+  FunctionName:
+    Description: Lambda function name.
+    Value: !Ref RoutingProfileFunction

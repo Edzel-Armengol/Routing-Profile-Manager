@@ -1,0 +1,40 @@
+.App {
+  padding: 20px;
+}
+
+.AppLoading,
+.ConfigurationError {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  min-height: 180px;
+  padding: 20px;
+}
+
+.ConfigurationError {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.AuthenticationRequired {
+  margin: 20px auto;
+  max-width: 640px;
+}
+
+.RoutingProfileCard {
+  margin-top: 20px;
+}
+
+.RoutingProfileSelector {
+  margin-top: 20px;
+  max-width: 400px;
+}
+
+.EmphasizedText {
+  font-weight: 700;
+}
+
+.SectionTitle {
+  margin: 0;
+}
