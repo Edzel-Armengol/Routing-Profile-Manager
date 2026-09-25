@@ -38,7 +38,7 @@ Content-Security-Policy: frame-ancestors https://*.awsapps.com https://*.my.conn
 This ensures the app can only be embedded inside the Amazon Connect Agent Workspace. Any attempt to load it in another website is blocked by the browser.
 
 ### Okta JWT Validation
-Every API request to the Lambda must include a valid Okta access token in the `Authorization` header. The Lambda:
+Every API request to the Lambda must include a valid Okta ID token in the `Authorization` header. The Lambda:
 - Fetches Okta's public signing keys (JWKS) and caches them for 1 hour
 - Verifies the token signature using RSA/SHA-256
 - Validates the issuer (`iss`) matches the configured Okta tenant URL
@@ -53,7 +53,7 @@ Any request without a valid token receives a `401 Unauthorized` response.
 
 1. The agent logs into Amazon Connect via Okta SSO.
 2. The Routing Profile Manager app loads inside the Agent Workspace.
-3. The app silently obtains an Okta access token in the background — no extra login required.
+3. The app silently obtains an Okta ID token in the background — no extra login required.
 4. The app fetches the agent's current routing profile from the Connect SDK.
 5. The app calls the Lambda with the Okta token to load the list of available routing profiles.
 6. The agent selects a new routing profile and clicks **Apply Routing Profile**.
@@ -198,14 +198,30 @@ Once the stack is complete:
 
 ---
 
-### PHASE 7 — Update the Okta Redirect URI
+### PHASE 7 — Okta Admin: Update Redirect URI and Add Trusted Origin
 
-Send the `CloudFrontUrl` to the client's Okta admin and ask them to:
+Send the `CloudFrontUrl` to the client's Okta admin and ask them to complete both steps below:
+
+**Step 1 — Update the Sign-in Redirect URI**
 
 1. Open the **Routing Profile Manager** OIDC app in Okta
 2. Go to the **General** tab → **General Settings** → click **Edit**
 3. Under **Sign-in redirect URIs**, replace `https://placeholder.cloudfront.net` with the real `CloudFrontUrl`
 4. Click **Save**
+
+**Step 2 — Add a Trusted Origin for iFrame Embedding**
+
+The app is loaded inside an iframe in the Amazon Connect Agent Workspace. Okta must be told to allow this, otherwise silent authentication will be blocked.
+
+1. In the Okta Admin Console, go to **Security → API → Trusted Origins**
+2. Click **Add Origin**
+3. Fill in:
+   - **Name**: `Amazon Connect Agent Workspace`
+   - **Origin URL**: the Connect Agent Workspace URL — e.g. `https://your-instance-alias.my.connect.aws`
+   - **Type**: check **iFrame embed** only
+4. Click **Save**
+
+> The Connect Agent Workspace URL follows the format `https://<instance-alias>.my.connect.aws`. The instance alias is visible in **AWS Console → Amazon Connect → your instance**.
 
 ---
 
