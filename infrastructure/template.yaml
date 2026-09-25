@@ -193,7 +193,6 @@ Resources:
         AllowMethods:
           - GET
           - PUT
-          - OPTIONS
         AllowOrigins:
           - !Sub https://${CloudFrontDistribution.DomainName}
         MaxAge: 300
