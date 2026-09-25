@@ -63,6 +63,8 @@ def _fetch_jwks() -> dict[str, Any]:
     if now < _jwks_cache["expires_at"] and _jwks_cache["keys"]:
         return _jwks_cache["keys"]
 
+    # Okta ID tokens issued by the org-level OIDC endpoint are signed with keys
+    # published at /oauth2/v1/keys (not the authorization server keys endpoint).
     jwks_url = f"{OKTA_ISSUER}/oauth2/v1/keys"
     try:
         with urllib.request.urlopen(jwks_url, timeout=5) as resp:
@@ -191,7 +193,7 @@ def verify_okta_token(event: dict[str, Any]) -> dict[str, Any]:
         LOGGER.warning(f"JWT issuer mismatch: {token_issuer}")
         raise RequestError(401, "Invalid authorization token.")
 
-    # Validate audience — must include the OIDC client ID
+    # Validate audience — for ID tokens, aud is always the OIDC client ID
     aud = payload.get("aud", "")
     if isinstance(aud, str):
         aud = [aud]

@@ -39,41 +39,57 @@ function getOktaAuth() {
 
 // ---------------------------------------------------------------------------
 // Okta token retrieval
-// Gets a cached access token from the SDK token manager, or fetches a fresh
-// one silently using getWithoutPrompt (no login prompt shown to the agent).
+// Gets a cached ID token from the SDK token manager, or fetches a fresh one
+// silently using getWithoutPrompt (no login prompt shown to the agent).
+// ID tokens are used (not access tokens) because their audience is always the
+// OIDC client ID, which the Lambda can verify without a custom auth server.
 // ---------------------------------------------------------------------------
 async function getOktaToken() {
   const oktaAuth = getOktaAuth();
 
-  // Check if we already have a valid token in the token manager
+  // Check if we already have a valid ID token in the token manager
   try {
-    const existingToken = await oktaAuth.tokenManager.get("accessToken");
+    const existingToken = await oktaAuth.tokenManager.get("idToken");
     if (existingToken && !oktaAuth.tokenManager.hasExpired(existingToken)) {
-      return existingToken.accessToken;
+      return existingToken.idToken;
     }
   } catch {
     // Token manager empty or expired — fall through to fetch a fresh token
   }
 
-  // Fetch a fresh token silently — agent is already authenticated via Okta SSO
+  // Fetch a fresh ID token silently — agent is already authenticated via Okta SSO.
+  // We use id_token (not access_token) because its audience is always the OIDC
+  // client ID, which the Lambda can verify without a custom Okta authorization server.
   try {
     const { tokens } = await oktaAuth.token.getWithoutPrompt({
-      responseType: ["token"],
+      responseType: ["id_token"],
       scopes: ["openid", "profile"],
     });
 
-    if (!tokens?.accessToken) {
+    if (!tokens?.idToken) {
       throw new ApiError("Unable to obtain authentication token.", 401);
     }
 
     // Store for future calls
     oktaAuth.tokenManager.setTokens(tokens);
-    return tokens.accessToken.accessToken;
+    return tokens.idToken.idToken;
   } catch (error) {
     if (error instanceof ApiError) throw error;
 
+    // Log the real Okta error so we can diagnose it in the browser console
+    console.error("[Okta] getWithoutPrompt failed:", {
+      name: error?.name,
+      message: error?.message,
+      errorCode: error?.errorCode,
+      errorSummary: error?.errorSummary,
+      error,
+    });
+
     // Okta returned an error — agent session may have expired
-    throw new ApiError("Authentication failed. Please log in again.", 401);
+    throw new ApiError(
+      `Authentication failed (${error?.errorCode || error?.name || "unknown"}). Please log in again.`,
+      401
+    );
   }
 }
 
