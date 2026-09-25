@@ -6,3 +6,6 @@ build/
 .env.*.local
 !.env.example
 npm-debug.log*
+
+# Lambda deployment package — must be built from source, never committed
+infrastructure/routing-profile-function.zip
