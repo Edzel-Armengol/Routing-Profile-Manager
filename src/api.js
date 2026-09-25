@@ -1,3 +1,4 @@
+import { OktaAuth } from "@okta/okta-auth-js";
 import { API_BASE_URL, OKTA_ISSUER, OKTA_CLIENT_ID } from "./config";
 
 export class ApiError extends Error {
@@ -9,89 +10,71 @@ export class ApiError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Okta token management
-// Obtains an ID token from Okta using the implicit flow (no redirect needed
-// for apps already running inside an authenticated Okta session via SSO).
-// The token is cached in memory and refreshed when it expires.
+// Okta Auth JS client
+// Initialised once at module load. Uses the Okta Auth JS SDK which handles
+// silent token renewal via postMessage — works correctly inside iframes such
+// as the Amazon Connect Agent Workspace.
 // ---------------------------------------------------------------------------
-let _cachedToken = null;
-let _tokenExpiresAt = 0;
+let _oktaAuth = null;
 
+function getOktaAuth() {
+  if (!_oktaAuth) {
+    if (!OKTA_ISSUER || !OKTA_CLIENT_ID) {
+      throw new ApiError("Okta is not configured.", 500);
+    }
+    _oktaAuth = new OktaAuth({
+      issuer: OKTA_ISSUER,
+      clientId: OKTA_CLIENT_ID,
+      redirectUri: window.location.origin,
+      scopes: ["openid", "profile"],
+      pkce: false,          // use implicit flow — no auth code exchange needed
+      tokenManager: {
+        autoRenew: true,    // SDK renews the token automatically before expiry
+        storage: "memory",  // store tokens in memory only — no localStorage
+      },
+    });
+  }
+  return _oktaAuth;
+}
+
+// ---------------------------------------------------------------------------
+// Okta token retrieval
+// Gets a cached access token from the SDK token manager, or fetches a fresh
+// one silently using getWithoutPrompt (no login prompt shown to the agent).
+// ---------------------------------------------------------------------------
 async function getOktaToken() {
-  const now = Date.now() / 1000;
+  const oktaAuth = getOktaAuth();
 
-  // Return cached token if still valid (with 60 second buffer)
-  if (_cachedToken && now < _tokenExpiresAt - 60) {
-    return _cachedToken;
+  // Check if we already have a valid token in the token manager
+  try {
+    const existingToken = await oktaAuth.tokenManager.get("accessToken");
+    if (existingToken && !oktaAuth.tokenManager.hasExpired(existingToken)) {
+      return existingToken.accessToken;
+    }
+  } catch {
+    // Token manager empty or expired — fall through to fetch a fresh token
   }
 
-  if (!OKTA_ISSUER || !OKTA_CLIENT_ID) {
-    throw new ApiError("Okta is not configured.", 500);
+  // Fetch a fresh token silently — agent is already authenticated via Okta SSO
+  try {
+    const { tokens } = await oktaAuth.token.getWithoutPrompt({
+      responseType: ["token"],
+      scopes: ["openid", "profile"],
+    });
+
+    if (!tokens?.accessToken) {
+      throw new ApiError("Unable to obtain authentication token.", 401);
+    }
+
+    // Store for future calls
+    oktaAuth.tokenManager.setTokens(tokens);
+    return tokens.accessToken.accessToken;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+
+    // Okta returned an error — agent session may have expired
+    throw new ApiError("Authentication failed. Please log in again.", 401);
   }
-
-  // Use the Okta /authorize endpoint with response_type=token (implicit flow)
-  // Since the agent is already authenticated via Okta SSO, this returns a
-  // token silently using a hidden iframe (no user interaction required).
-  const authorizeUrl = new URL(`${OKTA_ISSUER}/oauth2/v1/authorize`);
-  authorizeUrl.searchParams.set("client_id", OKTA_CLIENT_ID);
-  authorizeUrl.searchParams.set("response_type", "token");
-  authorizeUrl.searchParams.set("scope", "openid profile");
-  authorizeUrl.searchParams.set("redirect_uri", window.location.origin);
-  authorizeUrl.searchParams.set("nonce", crypto.randomUUID());
-  authorizeUrl.searchParams.set("prompt", "none"); // silent — no login prompt
-  authorizeUrl.searchParams.set("response_mode", "fragment");
-
-  return new Promise((resolve, reject) => {
-    const iframe = document.createElement("iframe");
-    iframe.style.display = "none";
-
-    const cleanup = () => {
-      if (iframe.parentNode) {
-        document.body.removeChild(iframe);
-      }
-    };
-
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new ApiError("Authentication timed out. Please refresh the page.", 401));
-    }, 10000);
-
-    iframe.onload = () => {
-      try {
-        const hash = iframe.contentWindow.location.hash;
-        const params = new URLSearchParams(hash.substring(1));
-        const accessToken = params.get("access_token");
-        const expiresIn = parseInt(params.get("expires_in") || "3600", 10);
-        const error = params.get("error");
-
-        clearTimeout(timeout);
-        cleanup();
-
-        if (error) {
-          reject(new ApiError("Authentication failed. Please log in again.", 401));
-          return;
-        }
-
-        if (!accessToken) {
-          reject(new ApiError("Unable to obtain authentication token.", 401));
-          return;
-        }
-
-        _cachedToken = accessToken;
-        _tokenExpiresAt = Date.now() / 1000 + expiresIn;
-        resolve(accessToken);
-      } catch {
-        // Cross-origin error means the redirect went to a different origin
-        // which shouldn't happen with prompt=none in a same-session context
-        clearTimeout(timeout);
-        cleanup();
-        reject(new ApiError("Authentication failed. Please log in again.", 401));
-      }
-    };
-
-    iframe.src = authorizeUrl.toString();
-    document.body.appendChild(iframe);
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -107,9 +90,9 @@ async function request(path, options = {}) {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${token}`,
-      ...(body ? { "Content-Type": "application/json" } : {})
+      ...(body ? { "Content-Type": "application/json" } : {}),
     },
-    ...(body ? { body } : {})
+    ...(body ? { body } : {}),
   });
 
   const contentType = fetchResponse.headers.get("content-type") || "";
@@ -134,6 +117,6 @@ export function listRoutingProfiles() {
 export function updateRoutingProfile(agentArn, routingProfileId) {
   return request("/routing-profile", {
     method: "PUT",
-    body: { agentArn, routingProfileId }
+    body: { agentArn, routingProfileId },
   });
 }
